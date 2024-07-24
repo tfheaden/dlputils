@@ -17,7 +17,9 @@ runs:
 
   - name: Install Chocolatey Dependencies
     shell: bash
-    run: choco install -y zip innoextract
+    run: |
+         choco install -y innosetup --version=6.2.2 --allow-downgrade
+         choco install -y zip innoextract
 
   #
   # Create Packages
@@ -38,7 +40,7 @@ runs:
       # Setup environment
       export DLPUTILS_VERSION=${{ env.dlputilsVersion }}
       export DLPUTILS_DIR=${GITHUB_WORKSPACE}/binaries/binaries-${{ env.dlputilsVersion }}-windows
-      export MINGW_LIB_DIR="C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin"
+      export MINGW_LIB_DIR="C:/mingw64/bin"
 
       # Run Inno Setup Compiler
       iscc.exe -O./ ./ci/windows/dlputils.iss

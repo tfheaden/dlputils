@@ -1,22 +1,22 @@
-!	** counthb **
-!	Counts the number of h-bonds between specified species per frame.
+!	** lifehb **
+!	Determine H-Bond lifetime histogram for interactions specified
 
-	program counthb
+	program lifehb
 	use dlprw; use utility
 	implicit none
-	integer, parameter :: MAXXH = 20, MAXY = 20
+	integer, parameter :: MAXXH = 20, MAXY = 20, MAXBINS = 10000
 	character*80 :: hisfile,dlpoutfile,altheaderfile
 	character*80 :: temp
 	integer :: n,nframes,success,nargs,m,i,iargc,m1,m2,j
 	integer :: framestodo = -1, framestodiscard = 0, t(9), sp1, sp2, nxh = 0, ny = 0, framesdone = 0
-	integer :: xh(MAXXH,2), y(MAXY), ncontacts(MAXXH)
-	real*8 :: averages(MAXXH,4), sds(MAXXH,4), total
-	real*8 :: dxy, rx(3), rh(3), vhx(3), dhx, ry(3), vhy(3), dhy, angle, dp, maxdist, minang, newavg
+	integer :: xh(MAXXH,2), y(MAXY), ncontacts, maxlife = 0
+	integer, allocatable :: hbflag(:,:,:,:)
+	real*8 :: dxy, rx(3), rh(3), vhx(3), dhx, ry(3), vhy(3), dhy, angle, dp, maxdist, minang, histo(MAXBINS)
 	logical :: altheader = .FALSE.
 
 	nargs = iargc()
-	if (nargs.LT.6) then
-	  write(0,"(a)") "Usage : counthb <HISTORYfile> <OUTPUTfile> <sp1 (XH)> <sp2 (Y)> <rXY max> <aXHY min>"
+	if (nargs.LT.7) then
+	  write(0,"(a)") "Usage : lifehb <HISTORYfile> <OUTPUTfile> <sp1 (XH)> <sp2 (Y)> <rXY max> <aXHY min>"
 	  write(0,"(10x,a)") "[-xh i j ...]     Specify donor site on species 1"
 	  write(0,"(10x,a)") "[-y k ...]        Specify acceptor site on species 2"
 	  write(0,"(10x,a)") "[-frames n]       Set number of frames to calculate (default = all)"
@@ -87,14 +87,17 @@
 	if (nxh.eq.0) stop "Error: No Y sites defined on species 2"
 	write(6,*) "Number of Y sites defined on species 2: ", ny
 	write(6,"(12x,i3,' (',a8,')')") (y(n), s_atom(sp2,y(n)), n=1,ny)
+
+	! Allocate lifetime flag array
+	allocate(hbflag(s_nmols(sp1),nxh,s_nmols(sp2),ny))
+	hbflag = 0
+	histo = 0.0
+	ncontacts = 0
 	
 	! XXXX
 	! XXXX Main routine....
 	! XXXX
-	! Set up the vars...
-	ncontacts = 0
-	averages = 0.0
-	sds = 0.0
+
 100	nframes=0
 	framesdone = 0
 101	success=readframe()
@@ -105,7 +108,6 @@
 	if (nframes.le.framestodiscard) goto 101
 
 	framesdone = framesdone + 1
-
 
 	! Loop over molecules of sp1
 	i = s_start(sp1)-1
@@ -139,37 +141,28 @@
 		dhy = sqrt(sum(vhy*vhy))
 	!write(0,*) "Y",vhy,dhy
 		vhy = vhy / dhy
-		
-		! Distance check
+
+		! Calculate XY distance
 		dxy = dsqrt(sum((rx-ry)*(rx-ry)))
-		if (dxy.gt.maxdist) cycle
-
-		! Angle check
-		dp = sum(vhx*vhy)
-		if (dp.gt.1.0d0) dp = 1.0d0
-		angle = dacos(dp) * 57.29577951d0
-		if (angle.lt.minang) cycle
-	!write(0,*) "Adding angle", angle, dp, i, j
 		
-		! Accumulate data
-		! ... H-X distance
-		newavg = (averages(n,1)*ncontacts(n) + dhx) / (ncontacts(n)+1)
-		sds(n,1) = (ncontacts(n)*sds(n,1) + (dhx-averages(n,1))*(dhx-newavg)) / (ncontacts(n)+1)
-		averages(n,1) = newavg
-		! ... H...Y distance
-		newavg = (averages(n,2)*ncontacts(n) + dhy) / (ncontacts(n)+1)
-		sds(n,2) = (ncontacts(n)*sds(n,2) + (dhy-averages(n,2))*(dhy-newavg)) / (ncontacts(n)+1)
-		averages(n,2) = newavg
-		! ... X...Y distance
-		newavg = (averages(n,3)*ncontacts(n) + dxy) / (ncontacts(n)+1)
-		sds(n,3) = (ncontacts(n)*sds(n,3) + (dxy-averages(n,3))*(dxy-newavg)) / (ncontacts(n)+1)
-		averages(n,3) = newavg
-		! ... X-H...Y angle
-		newavg = (averages(n,4)*ncontacts(n) + angle) / (ncontacts(n)+1)
-		sds(n,4) = (ncontacts(n)*sds(n,4) + (angle-averages(n,4))*(angle-newavg)) / (ncontacts(n)+1)
-		averages(n,4) = newavg
+		! Calculate angle
+		dp = sum(vhx*vhy)
+		angle = safeAngle(dp)
 
-		ncontacts(n) = ncontacts(n) + 1
+		! Geometry check - is it a hydrogen bond by our definition?
+		if ((dxy.gt.maxdist).or.(angle.lt.minang)) then
+		  ! No longer an H-bond so, if flag was already set, add to histo
+		  if (hbflag(m1,n,m2,m).ne.0) then
+		    ncontacts = ncontacts + 1
+		    histo(hbflag(m1,n,m2,m)) = histo(hbflag(m1,n,m2,m)) + 1.0
+		    if (hbflag(m1,n,m2,m).gt.maxlife) maxlife = hbflag(m1,n,m2,m)
+		    hbflag(m1,n,m2,m) = 0
+		  end if
+		  cycle
+		end if
+
+		! Increase flag counter for this contact
+		hbflag(m1,n,m2,m) = hbflag(m1,n,m2,m) + 1
 
 	      end do   ! Loop over Y
 
@@ -197,22 +190,30 @@
 800	write(0,*) "Framestodo was fulfilled."
 801	write(0,*) ""
 
+	! Accumulate remaining H-bonds...
+	i = 0
+	do m1=1,s_nmols(sp1)
+	  do n=1,nxh
+	    do m2=1,s_nmols(sp2)
+	      do m=1,ny
+		if (hbflag(m1,n,m2,m).ne.0) then
+		  i = i + 1
+		  ncontacts = ncontacts + 1
+		  histo(hbflag(m1,n,m2,m)) = histo(hbflag(m1,n,m2,m)) + 1.0
+		  if (hbflag(m1,n,m2,m).gt.maxlife) maxlife = hbflag(m1,n,m2,m)
+		  hbflag(m1,n,m2,m) = 0
+		end if
+	      end do   ! Loop over Y
+	    end do   ! Loop over sp2 molecules
+	  end do   ! Loop over XH
+	end do   ! Loop over sp1 molecules
+	if (i.gt.0) write(6,"(a,i8,a)") "Added on lifetime data for ", i, " contacts present at end of trajectory."
+
 	! Write out information
-	write(6,"(a,i7,a)") "Averages calculated over ", framesdone, " frames"
-	write(6,*) ""
-	write(6,"(a)") "      --Atom X------ - --Atom H------    NContacts  (Per Frame) (Per Mol)   Avg(rH-X)   Avg(rH-Y)   Avg(rX-Y)   Avg(aX-H-Y)"
-850	format (6x,i3,' (',a8,') - ',i3,' (',a8,')   ', i10, 2x, 6(es10.4,2x))
-851	format (76x,4(es10.4,2x),'  [STDEV]')
-	total = 0.0
-	do n=1,nxh
-	  write(6,850) xh(n,1), s_atom(sp1,xh(n,1)), xh(n,2), s_atom(sp1,xh(n,2)), ncontacts(n), real(ncontacts(n))/framesdone, real(ncontacts(n))/framesdone/s_nmols(sp1),averages(n,1:4)
-	  write(6,851) dsqrt(sds(n,1:4))
-	  total = total + real(ncontacts(n))/framesdone/s_nmols(sp1)
+	do n=1,maxlife
+	  write(6,*) n, histo(n), histo(n) / ncontacts
 	end do
 
-	write(6,*) ""
-	write(6,"(a,es10.4)") "Total contacts per molecule of species 1 : ", total
-
 999	write(0,*) "Finished."
-	end program counthb
+	end program lifehb
 

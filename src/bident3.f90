@@ -1,25 +1,33 @@
-!	** bident2 **
+!	** bident3 **
 !	Calculate style of binding between 'bidentate' species and positions on a central species
+!	Outputs distance histogram and angle/distance correlation for each
 
-	program bident2
+	program bident3
 	use dlprw; use utility
 	implicit none
-	character*80 :: hisfile,dlpoutfile,basename,headerfile
+	character*80 :: hisfile,dlpoutfile,headerfile,resfile
 	character*20 :: temparg
 	integer, parameter :: MAXSITES = 20, MAXCONTACTS = 10
+	real*8, parameter :: pi = 3.14159265358979d0, radcon = 57.29577951d0
 	integer :: nframes,success,nargs,n,m1,m2,i,j,baselen,aoff1,aoff2,m
 	integer :: framestodo = -1, framestodiscard = 0, sp1, sp2, nsp1sites = 0, sp1sites(MAXSITES,2), sp2sites(2)
 	integer :: iargc, site, nsingle, nbridging, nbidentate, closebit, bit, isclose(MAXSITES)
 	integer :: ncontacts
 	integer, allocatable :: centralbits(:), sp2ncontacts(:), sp2contacts(:,:,:)
 	logical :: dump = .false.
-	real*8 :: a(3),b(3),c(3),mima(3),mimb(3),maxdist,dac,dbc, total, sitetotals(MAXSITES)
+	real*8 :: a(3),b(3),c(3),d(3),mima(3),mimb(3),mimd(3),maxdist, total, sitetotals(MAXSITES)
 	real*8 :: singletab(MAXSITES), bifurtab(MAXSITES,MAXSITES), bridgetab(MAXSITES,MAXSITES), bitab(MAXSITES), multitab(MAXSITES)
+	real*8 :: binwidth, distances(MAXSITES,2), angles(MAXSITES,2)
+	integer :: nbins, dbin, abin
+	real*8, allocatable :: singlehist(:,:), bifurhist(:,:), bridgehist(:,:), bihist(:,:)
+	real*8, allocatable :: singlemap(:,:,:), bifurmap(:,:,:), bridgemap(:,:,:), bimap(:,:,:)
+
+	binwidth=0.05   ! In Angstroms
 
 	nargs = iargc()
 	if (nargs.lt.7) then
-	  write(0,"(a120)") "Usage : bident2 <HISTORYfile> <OUTfile> <sp1 (central)> <sp2 (outer)> <sp2 atom i> <sp2 atom j> <maxdist>"
-	  write(0,"(a80)") "    [-frames n] [-discard n] [-site a b (e.g. H-O)] [-dump]"
+	  write(0,"(a120)") "Usage : bident3 <HISTORYfile> <OUTfile> <sp1 (central)> <sp2 (outer)> <sp2 atom i> <sp2 atom j> <maxdist>"
+	  write(0,"(a80)") "    [-frames n] [-discard n] [-site a b (e.g. H-O)] [-dump] [-bin width]"
 	  stop
 	end if
 	call getarg(1,hisfile)
@@ -52,6 +60,8 @@
               n = n + 1; call getarg(n,temparg); read(temparg,"(i6)") framestodo
             case ("-discard")
               n = n + 1; call getarg(n,temparg); read(temparg,"(i6)") framestodiscard
+            case ("-bin")
+              n = n + 1; call getarg(n,temparg); read(temparg,"(f10.4)") binwidth
             case ("-dump")
               dump = .true.
 	    case default
@@ -61,21 +71,8 @@
 	end do
 	
 	! Open output files
-	! Ascertain length of basename....
-	baselen=-1
-	do n=80,1,-1
-	  if (hisfile(n:n).eq.".") then
-	    baselen=n
-	    goto 802
-	  endif
-	end do
-802     if (baselen.EQ.-1) then
-	  basename="rdfresults."
-	  baselen=11
-	else
-	  basename=hisfile(1:baselen)
-	endif
-	open(unit=11,file=basename(1:baselen)//"bident"//CHAR(48+sp1)//CHAR(48+sp2),form='formatted',status='replace')
+	resfile = outputFileName(hisfile, "bident3", "bident"//CHAR(48+sp1)//CHAR(48+sp2))
+	open(unit=11,file=resfile,form='formatted',status='replace')
 	write(11,"('# Central species is ',i4)") sp1
 	write(11,"('# Number of sites defined on central species ',i4)") nsp1sites
 	do n=1,nsp1sites
@@ -84,7 +81,7 @@
 	write(11,"('# Outer species is ',i4)") sp2
 	write(11,"('# Atom IDs used for interaction points :',i4,i4)") sp2sites
 	if (dump) then
-	  open(unit=12,file=basename(1:baselen)//"bidentdump"//CHAR(48+sp1)//CHAR(48+sp2),form='formatted',status='replace')
+	  open(unit=12,file="bidentdump"//CHAR(48+sp1)//CHAR(48+sp2),form='formatted',status='replace')
 	  write(12,*) "ncentre", s_nmols(sp1)
 	  write(12,*) "nouter", s_nmols(sp2)
 	  write(12,*) "ncentresites", nsp1sites
@@ -94,12 +91,26 @@
 	allocate(sp2contacts(s_nmols(sp2),MAXCONTACTS,2))
 	allocate(sp2ncontacts(s_nmols(sp2)))
 
+	nbins = maxdist/binwidth + 1
+
+	allocate(singlehist(nsp1sites,nbins), bifurhist(nsp1sites,nbins), bridgehist(nsp1sites,nbins), bihist(nsp1sites,nbins))
+	allocate(singlemap(nsp1sites,nbins,180), bifurmap(nsp1sites,nbins,180), bridgemap(nsp1sites,nbins,180), bimap(nsp1sites,nbins,180))
+
 	singletab = 0.0
 	bitab = 0.0
 	bridgetab = 0.0
 	bifurtab = 0.0
 	multitab = 0.0
 	total = 0.0
+
+	singlehist = 0.0
+	bifurhist = 0.0
+	bridgehist = 0.0
+	bihist = 0.0
+	singlemap = 0.0
+	bifurmap = 0.0
+	bridgemap = 0.0
+	bimap = 0.0
 
 	! XXXX
 	! XXXX Main routine....
@@ -137,6 +148,8 @@
 
 	      isclose = 0
 	      closebit = 0
+	      distances = 0.0
+	      angles = 0.0
 
 	      ! Loop over sites on central species
 	      do site = 1,nsp1sites
@@ -145,24 +158,36 @@
 	        c(1)=xpos(aoff1+sp1sites(site,1))
 	        c(2)=ypos(aoff1+sp1sites(site,1))
 	        c(3)=zpos(aoff1+sp1sites(site,1))
+	        d(1)=xpos(aoff1+sp1sites(site,2))
+	        d(2)=ypos(aoff1+sp1sites(site,2))
+	        d(3)=zpos(aoff1+sp1sites(site,2))
 
-	        ! Get MIM positions of outer species sites w.r.t. this site
+	        ! Get MIM vectors of outer species sites w.r.t. this site
 	        call pbc(a(1),a(2),a(3),c(1),c(2),c(3),mima(1),mima(2),mima(3))
 	        call pbc(b(1),b(2),b(3),c(1),c(2),c(3),mimb(1),mimb(2),mimb(3))
-	        mima = mima - c
-	        mimb = mimb - c
+	        mima = c - mima
+	        mimb = c - mimb
 
 	        ! Determine distances
-	        dac = sqrt(mima(1)*mima(1) + mima(2)*mima(2) + mima(3)*mima(3))
-	        dbc = sqrt(mimb(1)*mimb(1) + mimb(2)*mimb(2) + mimb(3)*mimb(3))
+	        distances(site,1) = sqrt(mima(1)*mima(1) + mima(2)*mima(2) + mima(3)*mima(3))
+	        distances(site,2) = sqrt(mimb(1)*mimb(1) + mimb(2)*mimb(2) + mimb(3)*mimb(3))
+
+		! Determine angles
+	        call pbc(d(1),d(2),d(3),c(1),c(2),c(3),mimd(1),mimd(2),mimd(3))
+		mima = mima / distances(site,1)
+		mimb = mimb / distances(site,2)
+		mimd = c - mimd
+		mimd = mimd / sqrt(sum(mimd*mimd))
+		angles(site,1) = safeAngle( sum(mima*mimd) )
+		angles(site,2) = safeAngle( sum(mimb*mimd) )
 
 	        ! Calculate closeness bit for central molecule
 		bit = 0
-	        if (dac.lt.maxdist) then
+	        if (distances(site,1).lt.maxdist) then
 		  bit = bit + 2**(site-1)
 		  isclose(site) = 1
 		end if
-		if (dbc.lt.maxdist) then
+		if (distances(site,2).lt.maxdist) then
 		  bit = bit + 2**(nsp1sites+site-1)
 		  isclose(site) = isclose(site) + 2
 		end if
@@ -195,13 +220,24 @@
 
 	        select case (ncontacts)
 		  case (1)
+		    ! A simple, single contact
 		    singletab(j) = singletab(j) + 1.0
-		    !if (dump) write(12,*) "unique",j,m1
+		    dbin = int(distances(j,isclose(j))/binwidth)+1
+		    abin = int(angles(j,isclose(j)))+1
+		    singlehist(j,dbin) = singlehist(j,dbin) + 1.0
+		    singlemap(j,dbin,abin) = singlemap(j,dbin,abin) + 1.0
 		  case (2)
 		    ! Either a bidentate or bridging interaction
 		    if (isclose(j).eq.3) then
 		      bitab(j) = bitab(j) + 2.0
-		      !if (dump) write(12,*) "bidentate",j,m1
+		      dbin = int(distances(j,1)/binwidth)+1
+		      abin = int(angles(j,1))+1
+		      bihist(j,dbin) = bihist(j,dbin) + 1.0
+		      bimap(j,dbin,abin) = bimap(j,dbin,abin) + 1.0
+		      dbin = int(distances(j,2)/binwidth)+1
+		      abin = int(angles(j,2))+1
+		      bihist(j,dbin) = bihist(j,dbin) + 1.0
+		      bimap(j,dbin,abin) = bimap(j,dbin,abin) + 1.0
 		    else
 		      ! Find other site...
 		      do n=1,nsp1sites
@@ -212,11 +248,27 @@
 		      if (isclose(n).eq.isclose(j)) then
 		        bifurtab(n,j) = bifurtab(n,j) + 1.0
 		        bifurtab(j,n) = bifurtab(j,n) + 1.0
-		        !if (dump) write(12,*) "bifurcated",n,j,m1
+		        dbin = int(distances(j,isclose(j))/binwidth)+1
+		        abin = int(angles(j,isclose(j)))+1
+		        bifurhist(j,dbin) = bifurhist(j,dbin) + 1.0
+		        bifurmap(j,dbin,abin) = bifurmap(j,dbin,abin) + 1.0
+		        dbin = int(distances(n,isclose(n))/binwidth)+1
+		        abin = int(angles(n,isclose(n)))+1
+		        bifurhist(n,dbin) = bifurhist(n,dbin) + 1.0
+		        bifurmap(n,dbin,abin) = bifurmap(n,dbin,abin) + 1.0
 		      else
 		        bridgetab(n,j) = bridgetab(n,j) + 1.0
 		        bridgetab(j,n) = bridgetab(j,n) + 1.0
 		        !if (dump) write(12,*) "bridge",n,j,m1
+		        dbin = int(distances(n,isclose(n))/binwidth)+1
+		        abin = int(angles(n,isclose(n)))+1
+		        bridgehist(n,dbin) = bridgehist(n,dbin) + 1.0
+		        bridgemap(n,dbin,abin) = bridgemap(n,dbin,abin) + 1.0
+		        dbin = int(distances(j,isclose(j))/binwidth)+1
+		        abin = int(angles(j,isclose(j)))+1
+		        bridgehist(j,dbin) = bridgehist(j,dbin) + 1.0
+		        bridgemap(j,dbin,abin) = bridgemap(j,dbin,abin) + 1.0
+
 		      end if
 		    end if
 		  case default
@@ -274,10 +326,10 @@
 	  sitetotals(i) = sitetotals(i) + multitab(i)
 	end do
 
-	write(11,"('Found ',f12.2,' individual contacts in ', i7,' frames')") total, nframes
-	write(11,"('  --> ',f12.2,' per frame')") total / nframes
-	write(11,"('  --> ',f12.2,' per molecule')") total / nframes / s_nmols(sp1)
-	write(11,"('Of these, ', f12.2, ' (',f5.1,'%) are isolated single contacts')") sum(singletab), sum(singletab)/total*100.0
+	write(11,"('Found ',f12.3,' individual contacts in ', i7,' frames')") total, nframes
+	write(11,"('  --> ',f12.3,' per frame')") total / nframes
+	write(11,"('  --> ',f12.3,' per molecule')") total / nframes / s_nmols(sp1)
+	write(11,"('Of these, ', f12.3, ' (',f5.1,'%) are isolated single contacts')") sum(singletab), sum(singletab)/total*100.0
 	write(11,"('          --> ',f12.2,' per frame')") sum(singletab) / nframes
 	write(11,"('          --> ',f12.2,' per central molecule')") sum(singletab) / nframes / s_nmols(sp1)
 	write(11,"('          ', f12.2, ' (',f5.1,'%) are paired in bidentate (X-S-X) interactions')") sum(bitab), sum(bitab)/total*100.0
@@ -300,7 +352,7 @@
 	write(11,"('Atom       :', 20(3x,i2,4x))") (sp1sites(n,1),n=1,nsp1sites)
 	write(11,"(a)") ""
 	write(11,"('N          :', 20(f7.3,2x))") (sitetotals(n)/nframes/s_nmols(sp1),n=1,nsp1sites)
-	write(11,"('%All       :', 20(f7.3,2x))") (sitetotals(n)/total*100.0,n=1,nsp1sites)
+	write(11,"('%All       :', 20(f7.3,2x))") (sitetotals(n)/sum(sitetotals)*100.0,n=1,nsp1sites)
 	write(11,"(a)") ""
 	write(11,"('Single     :', 20(f7.3,2x))") (singletab(n)/nframes/s_nmols(sp1),n=1,nsp1sites)
 	write(11,"('%Group     :', 20(f7.3,2x))") (singletab(n)/sum(singletab)*100.0,n=1,nsp1sites)
@@ -337,9 +389,81 @@
 
 	close(11)
 
+	! Normalise histogram data and write out
+	singlehist = singlehist / (nframes * s_nmols(sp1))
+	bifurhist = bifurhist / (nframes * s_nmols(sp1))
+	bridgehist = bridgehist / (nframes * s_nmols(sp1))
+	bihist = bihist / (nframes * s_nmols(sp1))
+	singlemap = singlemap / (nframes * s_nmols(sp1))
+	bifurmap = bifurmap / (nframes * s_nmols(sp1))
+	bridgemap = bridgemap / (nframes * s_nmols(sp1))
+	bimap = bimap / (nframes * s_nmols(sp1))
+
+	do site=1,nsp1sites
+	  resfile = outputFileName(hisfile, "bident3", "single_"//stringNMMOO(sp1,sp1sites(site,1),sp1sites(site,2))//"_"//stringNMMOO(sp2,sp2sites(1),sp2sites(2))//".dist")
+	  OPEN(UNIT=9,file=resfile,FORM="FORMATTED")
+	  do n=1,nbins
+	    write(9,"(f6.3,3x,e16.8)") (n*binwidth)-binwidth/2.0,singlehist(site,n)
+	  end do
+	  close(9)
+	  resfile = outputFileName(hisfile, "bident3", "bifur_"//stringNMMOO(sp1,sp1sites(site,1),sp1sites(site,2))//"_"//stringNMMOO(sp2,sp2sites(1),sp2sites(2))//".dist")
+	  OPEN(UNIT=9,file=resfile,FORM="FORMATTED")
+	  do n=1,nbins
+	    write(9,"(f6.3,3x,e16.8)") (n*binwidth)-binwidth/2.0,bifurhist(site,n)
+	  end do
+	  close(9)
+	  resfile = outputFileName(hisfile, "bident3", "bridge_"//stringNMMOO(sp1,sp1sites(site,1),sp1sites(site,2))//"_"//stringNMMOO(sp2,sp2sites(1),sp2sites(2))//".dist")
+	  OPEN(UNIT=9,file=resfile,FORM="FORMATTED")
+	  do n=1,nbins
+	    write(9,"(f6.3,3x,e16.8)") (n*binwidth)-binwidth/2.0,bridgehist(site,n)
+	  end do
+	  close(9)
+	  resfile = outputFileName(hisfile, "bident3", "bident_"//stringNMMOO(sp1,sp1sites(site,1),sp1sites(site,2))//"_"//stringNMMOO(sp2,sp2sites(1),sp2sites(2))//".dist")
+	  OPEN(UNIT=9,file=resfile,FORM="FORMATTED")
+	  do n=1,nbins
+	    write(9,"(f6.3,3x,e16.8)") (n*binwidth)-binwidth/2.0,bihist(site,n)
+	  end do
+	  close(9)
+
+	  resfile = outputFileName(hisfile, "bident3", "single_"//stringNMMOO(sp1,sp1sites(site,1),sp1sites(site,2))//"_"//stringNMMOO(sp2,sp2sites(1),sp2sites(2))//".surf")
+	  OPEN(UNIT=9,file=resfile,FORM="FORMATTED")
+	  do m=1,180
+	    do n=1,nbins
+	      write(9,"(3f16.8)") (n-0.5)*binwidth, m*1.0, singlemap(site,n,m)
+	    end do
+	    write(9,*) ""
+	  end do
+	  close(9)
+	  resfile = outputFileName(hisfile, "bident3", "bridge_"//stringNMMOO(sp1,sp1sites(site,1),sp1sites(site,2))//"_"//stringNMMOO(sp2,sp2sites(1),sp2sites(2))//".surf")
+	  OPEN(UNIT=9,file=resfile,FORM="FORMATTED")
+	  do m=1,180
+	    do n=1,nbins
+	      write(9,"(3f16.8)") (n-0.5)*binwidth, m*1.0, bridgemap(site,n,m)
+	    end do
+	    write(9,*) ""
+	  end do
+	  resfile = outputFileName(hisfile, "bident3", "bifur_"//stringNMMOO(sp1,sp1sites(site,1),sp1sites(site,2))//"_"//stringNMMOO(sp2,sp2sites(1),sp2sites(2))//".surf")
+	  OPEN(UNIT=9,file=resfile,FORM="FORMATTED")
+	  do m=1,180
+	    do n=1,nbins
+	      write(9,"(3f16.8)") (n-0.5)*binwidth, m*1.0, bifurmap(site,n,m)
+	    end do
+	    write(9,*) ""
+	  end do
+	  resfile = outputFileName(hisfile, "bident3", "bident_"//stringNMMOO(sp1,sp1sites(site,1),sp1sites(site,2))//"_"//stringNMMOO(sp2,sp2sites(1),sp2sites(2))//".surf")
+	  OPEN(UNIT=9,file=resfile,FORM="FORMATTED")
+	  do m=1,180
+	    do n=1,nbins
+	      write(9,"(3f16.8)") (n-0.5)*binwidth, m*1.0, bimap(site,n,m)
+	    end do
+	    write(9,*) ""
+	  end do
+
+	end do
+
 	write(0,*) "Finished."
 999	close(14)
-	end program bident2
+	end program bident3
 
 	real*8 function calcangle(a,b,c)
 	use utility; implicit none
@@ -359,5 +483,5 @@
 	v2 = v2 / v2mag
         ! Calculate dot product and angle...
         dp = (v1(1)*v2(1) + v1(2)*v2(2) + v1(3)*v2(3))
-        calcangle = acos(dp)* 57.29577951d0
+        calcangle = safeAngle(dp)
 	end function calcangle
